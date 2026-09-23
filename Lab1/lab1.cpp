@@ -26,9 +26,6 @@ void task_1_2_1()
 
     thread t1(Thread1);
     thread t2(Thread2);
-
-    t1.join();
-    t2.join();
 }
 
 
@@ -600,8 +597,6 @@ int main()
 
     SetConsoleCP(1251);
     SetConsoleOutputCP(1251);
-
-    task_1_2_1();
 
     task_1_2_2();
 
