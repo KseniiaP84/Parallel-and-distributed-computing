@@ -1,44 +1,86 @@
 #include "tasks.hpp"
+#include "helpers.hpp"
 #include <iostream>
+#include <deque>
 #include <thread>
+#include <future>
 #include <mutex>
 #include <condition_variable>
-#include <chrono>
+#include <string>
 
-static std::mutex mtx3;
-static std::condition_variable cv3;
-static int i_var3 = 0;
+static std::deque<std::packaged_task<long long()>> task_queue;
+static std::deque<int> n_queue;
+static std::mutex deque_mtx;
+static std::condition_variable cv6;
+static bool stop_worker = false;
 
-static void ThreadFunc(int id) {
-    std::unique_lock<std::mutex> lk(mtx3);
-    cv3.wait(lk, []() { return i_var3 == 1; });
-    std::cout << "Повідомлення з потоку " << id << "\n";
-}
+static void WorkerThread() {
+    while (true) {
+        std::packaged_task<long long()> task;
+        int n_val = 0;
 
-static void Notify() {
-    std::this_thread::sleep_for(std::chrono::milliseconds(100));
-    {
-        std::lock_guard<std::mutex> lk(mtx3);
-        i_var3 = 1;
+        {
+            std::unique_lock<std::mutex> lock(deque_mtx);
+            cv6.wait(lock, []() { return !task_queue.empty() || stop_worker; });
+
+            if (stop_worker && task_queue.empty()) break;
+
+            task = std::move(task_queue.front());
+            task_queue.pop_front();
+            n_val = n_queue.front();
+            n_queue.pop_front();
+        }
+
+        task(); // Виконуємо задачу
     }
-    std::cout << "[Notify] Викликаємо notify_one()...\n";
-    cv3.notify_one();
 }
 
-void runTask3() {
-    i_var3 = 0;
-    std::thread t1(ThreadFunc, 1);
-    std::thread t2(ThreadFunc, 2);
-    std::thread t3(ThreadFunc, 3);
-    std::thread tNotify(Notify);
+void runTask6() {
+    stop_worker = false;
+    std::thread worker(WorkerThread);
 
-    tNotify.join();
+    std::deque<std::future<long long>> futures;
+    std::deque<int> requested_n;
 
-    // Щоб завершити інші потоки, розсилаємо сповіщення решті
-    std::this_thread::sleep_for(std::chrono::milliseconds(100));
-    cv3.notify_all();
+    std::cout << "Введіть n (номери простих чисел) або 'stop' для завершення:\n";
+    std::string input;
+    while (true) {
+        std::cout << "> ";
+        std::cin >> input;
+        if (input == "stop") break;
 
-    t1.join();
-    t2.join();
-    t3.join();
+        try {
+            int n = std::stoi(input);
+            std::packaged_task<long long()> task([n]() { return getNthPrime(n); });
+            std::future<long long> fut = task.get_future();
+
+            {
+                std::lock_guard<std::mutex> lock(deque_mtx);
+                task_queue.push_back(std::move(task));
+                n_queue.push_back(n);
+            }
+            cv6.notify_one();
+
+            futures.push_back(std::move(fut));
+            requested_n.push_back(n);
+        }
+        catch (...) {
+            std::cout << "Некоректне введення. Спробуйте ще раз або введіть 'stop'.\n";
+        }
+    }
+
+    // Сигналізуємо про завершення
+    {
+        std::lock_guard<std::mutex> lock(deque_mtx);
+        stop_worker = true;
+    }
+    cv6.notify_all();
+
+    // Очікуємо завершення обчислень та виводимо результати
+    for (size_t i = 0; i < futures.size(); ++i) {
+        long long res = futures[i].get();
+        std::cout << "Результат для n = " << requested_n[i] << ": " << res << "\n";
+    }
+
+    if (worker.joinable()) worker.join();
 }
